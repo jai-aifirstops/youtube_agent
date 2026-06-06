@@ -61,9 +61,10 @@ def test_tts_failure_retries_and_writes_silent_fallback(monkeypatch, tmp_path) -
 
     async def fail_tts(*args, **kwargs):
         attempts.append("failed")
-        raise RuntimeError("edge service unavailable")
+        raise RuntimeError("speech.platform.bing.com unavailable")
 
     monkeypatch.setattr(audio, "synthesize_voice_async", fail_tts)
+    monkeypatch.setattr(audio.time, "sleep", lambda seconds: None)
 
     output_path = tmp_path / "voice.mp3"
     fallback_path = tmp_path / "silent_voice.wav"
@@ -75,11 +76,9 @@ def test_tts_failure_retries_and_writes_silent_fallback(monkeypatch, tmp_path) -
         pitch="+0Hz",
         fallback_path=fallback_path,
         fallback_duration_seconds=2,
-        attempts=2,
-        retry_delay_seconds=0,
     )
 
-    assert attempts == ["failed", "failed"]
+    assert attempts == ["failed", "failed", "failed"]
     assert returned_path == fallback_path
     assert not output_path.exists()
     with wave.open(str(fallback_path), "rb") as wav:
@@ -88,11 +87,11 @@ def test_tts_failure_retries_and_writes_silent_fallback(monkeypatch, tmp_path) -
         assert wav.getnframes() == 88_200
 
 
-def test_no_voice_skips_tts_and_continues_to_render(monkeypatch, tmp_path) -> None:
+def test_skip_tts_alias_skips_tts_and_continues_to_render(monkeypatch, tmp_path) -> None:
     render_calls = []
 
     def fail_if_called(*args, **kwargs):
-        raise AssertionError("TTS should not run with --no-voice")
+        raise AssertionError("TTS should not run with --skip-tts")
 
     def fake_music(path, *, duration_seconds, volume=0.14):
         path.write_bytes(b"fake music")
@@ -115,7 +114,7 @@ def test_no_voice_skips_tts_and_continues_to_render(monkeypatch, tmp_path) -> No
         [
             "run",
             "--offline",
-            "--no-voice",
+            "--skip-tts",
             "--date",
             "2026-06-06",
             "--output-dir",
@@ -129,3 +128,59 @@ def test_no_voice_skips_tts_and_continues_to_render(monkeypatch, tmp_path) -> No
     assert metadata["voice_file"] is None
     assert len(render_calls) == 1
     assert render_calls[0]["voice_path"] is None
+
+
+def test_tts_bing_failure_falls_back_and_does_not_block_upload(monkeypatch, tmp_path) -> None:
+    attempts: list[str] = []
+    uploads: list[dict] = []
+
+    async def fail_tts(*args, **kwargs):
+        attempts.append("failed")
+        raise ConnectionError("speech.platform.bing.com failed")
+
+    def fake_music(path, *, duration_seconds, volume=0.14):
+        path.write_bytes(b"fake music")
+        return path
+
+    def fake_render(*args, **kwargs):
+        kwargs["output_path"].write_bytes(b"fake video")
+        assert kwargs["voice_path"] == tmp_path / "silent_voice.wav"
+        return kwargs["output_path"]
+
+    def fake_upload(video_path, **kwargs):
+        uploads.append({"video_path": video_path, **kwargs})
+        return "https://youtube.example/watch?v=test"
+
+    monkeypatch.setattr(audio, "synthesize_voice_async", fail_tts)
+    monkeypatch.setattr(audio.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr("youtube_daily_automation.cli.generate_background_music", fake_music)
+    monkeypatch.setitem(
+        sys.modules,
+        "youtube_daily_automation.video",
+        types.SimpleNamespace(render_video=fake_render),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "youtube_daily_automation.upload",
+        types.SimpleNamespace(upload_video=fake_upload),
+    )
+
+    exit_code = main(
+        [
+            "run",
+            "--offline",
+            "--upload",
+            "--date",
+            "2026-06-06",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    metadata = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert attempts == ["failed", "failed", "failed"]
+    assert uploads[0]["video_path"] == tmp_path / "daily_top_10_2026-06-06.mp4"
+    assert metadata["voice_file"] == str(tmp_path / "silent_voice.wav")
+    assert metadata["youtube_url"] == "https://youtube.example/watch?v=test"
