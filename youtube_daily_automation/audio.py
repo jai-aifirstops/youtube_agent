@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 import wave
 from pathlib import Path
+
+
+DEFAULT_TTS_ATTEMPTS = 3
 
 
 async def synthesize_voice_async(
@@ -21,16 +25,61 @@ async def synthesize_voice_async(
     return output_path
 
 
-def synthesize_voice(text: str, output_path: Path, *, voice: str, rate: str, pitch: str) -> Path:
-    return asyncio.run(
-        synthesize_voice_async(
-            text,
-            output_path,
-            voice=voice,
-            rate=rate,
-            pitch=pitch,
-        )
+def synthesize_voice(
+    text: str,
+    output_path: Path,
+    *,
+    voice: str,
+    rate: str,
+    pitch: str,
+    fallback_path: Path | None = None,
+    fallback_duration_seconds: int = 60,
+    attempts: int = DEFAULT_TTS_ATTEMPTS,
+    retry_delay_seconds: float = 1.0,
+) -> Path:
+    if attempts < 1:
+        raise ValueError("TTS attempts must be at least 1.")
+
+    errors: list[str] = []
+    for attempt in range(1, attempts + 1):
+        try:
+            return asyncio.run(
+                synthesize_voice_async(
+                    text,
+                    output_path,
+                    voice=voice,
+                    rate=rate,
+                    pitch=pitch,
+                )
+            )
+        except Exception as error:
+            errors.append(f"attempt {attempt}: {error}")
+            if output_path.exists():
+                output_path.unlink()
+            if attempt < attempts:
+                time.sleep(retry_delay_seconds * attempt)
+
+    placeholder_path = fallback_path or output_path.with_name("silent_voice.wav")
+    generate_silent_audio(placeholder_path, duration_seconds=fallback_duration_seconds)
+    print(
+        "Edge TTS failed after "
+        f"{attempts} attempts; using silent placeholder audio at {placeholder_path}. "
+        f"Last error: {errors[-1]}"
     )
+    return placeholder_path
+
+
+def generate_silent_audio(output_path: Path, *, duration_seconds: int) -> Path:
+    sample_rate = 44_100
+    frame_count = duration_seconds * sample_rate
+
+    with wave.open(str(output_path), "w") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(b"\x00\x00" * frame_count)
+
+    return output_path
 
 
 def generate_background_music(output_path: Path, *, duration_seconds: int, volume: float = 0.14) -> Path:

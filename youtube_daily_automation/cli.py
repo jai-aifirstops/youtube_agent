@@ -65,15 +65,19 @@ def run(args: argparse.Namespace) -> int:
         generate_background_music(music_path, duration_seconds=config.video_length_seconds)
 
     voice_path: Path | None = None
-    if not args.skip_tts:
-        voice_path = output_dir / "voice.mp3"
-        synthesize_voice(
+    if not args.no_voice:
+        voice_path = synthesize_voice(
             video_script.narration,
-            voice_path,
+            output_dir / "voice.mp3",
             voice=config.voice,
             rate=config.tts_rate,
             pitch=config.tts_pitch,
+            fallback_path=output_dir / "silent_voice.wav",
+            fallback_duration_seconds=config.video_length_seconds,
         )
+        metadata["voice_file"] = str(voice_path)
+    else:
+        metadata["voice_file"] = None
 
     video_path = output_dir / f"daily_top_10_{day.isoformat()}.mp4"
     from .video import render_video
@@ -116,7 +120,13 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--offline", action="store_true", help="Use built-in fallback topics instead of Wikimedia.")
     run_parser.add_argument("--dry-run", action="store_true", help="Write script and metadata without TTS, video, or upload.")
     run_parser.add_argument("--upload", action="store_true", help="Upload the rendered video to YouTube.")
-    run_parser.add_argument("--skip-tts", action="store_true", help="Render without narration. Intended only for local testing.")
+    run_parser.add_argument(
+        "--no-voice",
+        "--skip-tts",
+        dest="no_voice",
+        action="store_true",
+        help="Render without TTS narration. Intended only for local testing.",
+    )
     run_parser.add_argument("--music-file", help="Optional custom background music file.")
 
     auth_parser = subparsers.add_parser("auth", help="Create a YouTube OAuth token file locally.")

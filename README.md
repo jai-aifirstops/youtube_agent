@@ -9,6 +9,7 @@ Important: automation cannot create a YouTube account or channel for you. Create
 - Fetches daily topic ideas from Wikimedia's "On this day" feed, with built-in fallback facts.
 - Builds a concise narration script and YouTube description.
 - Generates TTS narration with `edge-tts`.
+- Retries TTS generation and falls back to silent placeholder audio if Edge TTS is unavailable.
 - Generates royalty-free background music locally.
 - Renders a vertical MP4 video suitable for Shorts-style content.
 - Uploads through OAuth using the YouTube Data API.
@@ -31,6 +32,12 @@ Render a local video without uploading:
 
 ```bash
 youtube-daily run
+```
+
+Render faster for local testing without voice generation:
+
+```bash
+youtube-daily run --no-voice
 ```
 
 Render and upload:
