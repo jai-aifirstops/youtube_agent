@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import math
-import os
 import time
 import wave
 from pathlib import Path
 
 
 DEFAULT_TTS_ATTEMPTS = 3
-OPENAI_SPEECH_URL = "https://api.openai.com/v1/audio/speech"
 
 
 async def synthesize_voice_async(
@@ -36,8 +34,6 @@ def synthesize_documentary_voice(
     fallback_duration_seconds: int = 480,
     attempts: int = DEFAULT_TTS_ATTEMPTS,
     retry_delay_seconds: float = 1.0,
-    openai_model: str = "gpt-4o-mini-tts",
-    openai_voice: str = "onyx",
     edge_voice: str = "en-US-GuyNeural",
     edge_rate: str = "+0%",
     edge_pitch: str = "+0Hz",
@@ -47,33 +43,26 @@ def synthesize_documentary_voice(
     if provider == "silent":
         placeholder_path = fallback_path or output_path.with_name("silent_voice.wav")
         return generate_silent_audio(placeholder_path, duration_seconds=fallback_duration_seconds)
+    if provider != "edge":
+        raise ValueError("TTS_PROVIDER must be edge or silent.")
 
     chunks = _split_text_for_tts(text)
     errors: list[str] = []
-    provider_chain = ["openai", "edge"] if provider == "openai" else [provider]
-    if provider not in {"openai", "edge"}:
-        errors.append("TTS_PROVIDER must be openai, edge, or silent.")
-        provider_chain = []
-
-    for active_provider in provider_chain:
-        try:
-            _synthesize_chunks(
-                chunks,
-                output_path,
-                provider=active_provider,
-                attempts=attempts,
-                retry_delay_seconds=retry_delay_seconds,
-                openai_model=openai_model,
-                openai_voice=openai_voice,
-                edge_voice=edge_voice,
-                edge_rate=edge_rate,
-                edge_pitch=edge_pitch,
-            )
-            return output_path
-        except Exception as error:
-            errors.append(f"{active_provider}: {error}")
-            if output_path.exists():
-                output_path.unlink()
+    try:
+        _synthesize_chunks(
+            chunks,
+            output_path,
+            attempts=attempts,
+            retry_delay_seconds=retry_delay_seconds,
+            edge_voice=edge_voice,
+            edge_rate=edge_rate,
+            edge_pitch=edge_pitch,
+        )
+        return output_path
+    except Exception as error:
+        errors.append(str(error))
+        if output_path.exists():
+            output_path.unlink()
 
     placeholder_path = fallback_path or output_path.with_name("silent_voice.wav")
     generate_silent_audio(placeholder_path, duration_seconds=fallback_duration_seconds)
@@ -88,11 +77,8 @@ def _synthesize_chunks(
     chunks: list[str],
     output_path: Path,
     *,
-    provider: str,
     attempts: int,
     retry_delay_seconds: float,
-    openai_model: str,
-    openai_voice: str,
     edge_voice: str,
     edge_rate: str,
     edge_pitch: str,
@@ -102,11 +88,8 @@ def _synthesize_chunks(
             _synthesize_provider_chunk(
                 chunks[0],
                 output_path,
-                provider=provider,
                 attempts=attempts,
                 retry_delay_seconds=retry_delay_seconds,
-                openai_model=openai_model,
-                openai_voice=openai_voice,
                 edge_voice=edge_voice,
                 edge_rate=edge_rate,
                 edge_pitch=edge_pitch,
@@ -119,11 +102,8 @@ def _synthesize_chunks(
             _synthesize_provider_chunk(
                 chunk,
                 segment_path,
-                provider=provider,
                 attempts=attempts,
                 retry_delay_seconds=retry_delay_seconds,
-                openai_model=openai_model,
-                openai_voice=openai_voice,
                 edge_voice=edge_voice,
                 edge_rate=edge_rate,
                 edge_pitch=edge_pitch,
@@ -141,11 +121,8 @@ def _synthesize_provider_chunk(
     text: str,
     output_path: Path,
     *,
-    provider: str,
     attempts: int,
     retry_delay_seconds: float,
-    openai_model: str,
-    openai_voice: str,
     edge_voice: str,
     edge_rate: str,
     edge_pitch: str,
@@ -153,20 +130,16 @@ def _synthesize_provider_chunk(
     errors: list[str] = []
     for attempt in range(1, attempts + 1):
         try:
-            if provider == "openai":
-                return _openai_tts(text, output_path, model=openai_model, voice=openai_voice)
-            if provider == "edge":
-                asyncio.run(
-                    synthesize_voice_async(
-                        text,
-                        output_path,
-                        voice=edge_voice,
-                        rate=edge_rate,
-                        pitch=edge_pitch,
-                    )
+            asyncio.run(
+                synthesize_voice_async(
+                    text,
+                    output_path,
+                    voice=edge_voice,
+                    rate=edge_rate,
+                    pitch=edge_pitch,
                 )
-                return output_path
-            raise ValueError("TTS_PROVIDER must be openai, edge, or silent.")
+            )
+            return output_path
         except Exception as error:
             errors.append(f"attempt {attempt}: {error}")
             if output_path.exists():
@@ -205,24 +178,6 @@ def _concatenate_audio_files(segment_paths: list[Path], output_path: Path) -> Pa
     audio.close()
     for clip in clips:
         clip.close()
-    return output_path
-
-
-def _openai_tts(text: str, output_path: Path, *, model: str, voice: str) -> Path:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is required for OpenAI TTS.")
-
-    import requests
-
-    response = requests.post(
-        OPENAI_SPEECH_URL,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={"model": model, "voice": voice, "input": text, "response_format": "mp3"},
-        timeout=180,
-    )
-    response.raise_for_status()
-    output_path.write_bytes(response.content)
     return output_path
 
 

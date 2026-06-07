@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import base64
 import json
 import sys
 import types
@@ -81,13 +80,20 @@ def test_cli_dry_run_writes_documentary_assets(tmp_path) -> None:
     assert metadata["scene_count"] == 3
     assert metadata["duration_seconds"] == 12
     assert metadata["dry_run"] is True
-    assert metadata["image_provider"] == "openai"
+    assert metadata["image_provider"] == "wikimedia"
     assert len(prompts) == 3
     assert (tmp_path / "subtitles.srt").exists()
 
 
-def test_visual_assets_fall_back_without_openai_key(monkeypatch, tmp_path) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+def test_visual_assets_fall_back_when_wikimedia_has_no_result(monkeypatch, tmp_path) -> None:
+    class EmptyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"query": {"pages": []}}
+
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(get=lambda *args, **kwargs: EmptyResponse()))
     plan = build_documentary_plan(
         topic="Ocean Mysteries",
         day=dt.date(2026, 6, 6),
@@ -100,31 +106,58 @@ def test_visual_assets_fall_back_without_openai_key(monkeypatch, tmp_path) -> No
     assets = prepare_scene_visual_assets(
         plan,
         tmp_path / "scene_assets",
-        provider="openai",
-        openai_model="dall-e-3",
-        openai_size="1792x1024",
+        provider="wikimedia",
     )
 
     assert [asset.provider for asset in assets] == ["fallback", "fallback"]
     assert (tmp_path / "scene_assets" / "scene_01.png").exists()
-    assert not (tmp_path / "scene_assets" / "ai_scene_01.png").exists()
+    assert not (tmp_path / "scene_assets" / "wikimedia_scene_01.png").exists()
 
 
-def test_visual_assets_write_openai_images_when_key_exists(monkeypatch, tmp_path) -> None:
+def test_visual_assets_download_wikimedia_images(monkeypatch, tmp_path) -> None:
     image = Image.new("RGB", (16, 9), color=(25, 50, 75))
     buffer = BytesIO()
     image.save(buffer, format="PNG")
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    image_bytes = buffer.getvalue()
 
-    class FakeResponse:
+    class FakeApiResponse:
         def raise_for_status(self):
             return None
 
         def json(self):
-            return {"data": [{"b64_json": encoded}]}
+            return {
+                "query": {
+                    "pages": [
+                        {
+                            "title": "File:Ocean.jpg",
+                            "imageinfo": [
+                                {
+                                    "mime": "image/jpeg",
+                                    "url": "https://example.test/ocean.png",
+                                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Ocean.jpg",
+                                    "extmetadata": {
+                                        "LicenseShortName": {"value": "CC BY-SA 4.0"},
+                                        "Artist": {"value": "Example Photographer"},
+                                    },
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(post=lambda *args, **kwargs: FakeResponse()))
+    class FakeImageResponse:
+        content = image_bytes
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, *args, **kwargs):
+        if "commons.wikimedia.org" in url:
+            return FakeApiResponse()
+        return FakeImageResponse()
+
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(get=fake_get))
     plan = build_documentary_plan(
         topic="Ocean Mysteries",
         day=dt.date(2026, 6, 6),
@@ -137,52 +170,38 @@ def test_visual_assets_write_openai_images_when_key_exists(monkeypatch, tmp_path
     assets = prepare_scene_visual_assets(
         plan,
         tmp_path / "scene_assets",
-        provider="openai",
-        openai_model="dall-e-3",
-        openai_size="1792x1024",
+        provider="wikimedia",
     )
 
-    assert assets[0].provider == "openai"
-    assert assets[0].path.endswith("ai_scene_01.png")
-    assert (tmp_path / "scene_assets" / "ai_scene_01.png").exists()
+    assert assets[0].provider == "wikimedia"
+    assert assets[0].path.endswith("wikimedia_scene_01.png")
+    assert assets[0].license_name == "CC BY-SA 4.0"
+    assert (tmp_path / "scene_assets" / "wikimedia_scene_01.png").exists()
 
 
-def test_openai_tts_failure_falls_back_to_edge(monkeypatch, tmp_path) -> None:
-    attempts: list[str] = []
-
-    def fail_tts(*args, **kwargs):
-        attempts.append("failed")
-        raise RuntimeError("speech provider unavailable")
-
+def test_edge_tts_success_writes_voice_file(monkeypatch, tmp_path) -> None:
     async def edge_tts(text, output_path, **kwargs):
         output_path.write_bytes(b"edge voice")
         return output_path
 
-    monkeypatch.setattr(audio, "_openai_tts", fail_tts)
     monkeypatch.setattr(audio, "synthesize_voice_async", edge_tts)
-    monkeypatch.setattr(audio.time, "sleep", lambda seconds: None)
 
     output_path = tmp_path / "voice.mp3"
     returned_path = audio.synthesize_documentary_voice(
         "hello",
         output_path,
-        provider="openai",
+        provider="edge",
         fallback_duration_seconds=2,
     )
 
-    assert attempts == ["failed", "failed", "failed"]
     assert returned_path == output_path
     assert output_path.read_bytes() == b"edge voice"
 
 
-def test_all_tts_failures_write_silent_fallback(monkeypatch, tmp_path) -> None:
-    def fail_openai(*args, **kwargs):
-        raise RuntimeError("openai unavailable")
-
+def test_edge_tts_failure_writes_silent_fallback(monkeypatch, tmp_path) -> None:
     async def fail_edge(*args, **kwargs):
         raise RuntimeError("edge unavailable")
 
-    monkeypatch.setattr(audio, "_openai_tts", fail_openai)
     monkeypatch.setattr(audio, "synthesize_voice_async", fail_edge)
     monkeypatch.setattr(audio.time, "sleep", lambda seconds: None)
 
@@ -191,7 +210,7 @@ def test_all_tts_failures_write_silent_fallback(monkeypatch, tmp_path) -> None:
     returned_path = audio.synthesize_documentary_voice(
         "hello",
         output_path,
-        provider="openai",
+        provider="edge",
         fallback_path=fallback_path,
         fallback_duration_seconds=2,
     )
@@ -219,8 +238,16 @@ def test_skip_tts_alias_skips_tts_and_continues_to_render(monkeypatch, tmp_path)
         kwargs["output_path"].write_bytes(b"fake video")
         return kwargs["output_path"]
 
+    def fake_visual_assets(plan, assets_dir, *, provider):
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        return [
+            types.SimpleNamespace(path=str(assets_dir / f"scene_{scene.number:02d}.png"), to_dict=lambda scene=scene: {"scene_number": scene.number})
+            for scene in plan.scenes
+        ]
+
     monkeypatch.setattr("youtube_daily_automation.cli.synthesize_documentary_voice", fail_if_called)
     monkeypatch.setattr("youtube_daily_automation.cli.generate_background_music", fake_music)
+    monkeypatch.setattr("youtube_daily_automation.cli.prepare_scene_visual_assets", fake_visual_assets)
     monkeypatch.setitem(
         sys.modules,
         "youtube_daily_automation.video",
@@ -254,12 +281,7 @@ def test_skip_tts_alias_skips_tts_and_continues_to_render(monkeypatch, tmp_path)
 
 
 def test_tts_failure_falls_back_and_does_not_block_upload(monkeypatch, tmp_path) -> None:
-    attempts: list[str] = []
     uploads: list[dict] = []
-
-    def fail_tts(*args, **kwargs):
-        attempts.append("failed")
-        raise ConnectionError("api.openai.com failed")
 
     async def fail_edge(*args, **kwargs):
         raise RuntimeError("speech.platform.bing.com failed")
@@ -277,10 +299,17 @@ def test_tts_failure_falls_back_and_does_not_block_upload(monkeypatch, tmp_path)
         uploads.append({"video_path": video_path, **kwargs})
         return "https://youtube.example/watch?v=test"
 
-    monkeypatch.setattr(audio, "_openai_tts", fail_tts)
+    def fake_visual_assets(plan, assets_dir, *, provider):
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        return [
+            types.SimpleNamespace(path=str(assets_dir / f"scene_{scene.number:02d}.png"), to_dict=lambda scene=scene: {"scene_number": scene.number})
+            for scene in plan.scenes
+        ]
+
     monkeypatch.setattr(audio, "synthesize_voice_async", fail_edge)
     monkeypatch.setattr(audio.time, "sleep", lambda seconds: None)
     monkeypatch.setattr("youtube_daily_automation.cli.generate_background_music", fake_music)
+    monkeypatch.setattr("youtube_daily_automation.cli.prepare_scene_visual_assets", fake_visual_assets)
     monkeypatch.setitem(
         sys.modules,
         "youtube_daily_automation.video",
@@ -312,7 +341,6 @@ def test_tts_failure_falls_back_and_does_not_block_upload(monkeypatch, tmp_path)
     metadata = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
 
     assert exit_code == 0
-    assert attempts == ["failed", "failed", "failed"]
     assert uploads[0]["video_path"] == tmp_path / "daily_documentary_2026-06-06.mp4"
     assert metadata["voice_file"] == str(tmp_path / "silent_voice.wav")
     assert metadata["youtube_url"] == "https://youtube.example/watch?v=test"

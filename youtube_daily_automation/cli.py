@@ -107,8 +107,6 @@ def run(args: argparse.Namespace) -> int:
         plan,
         output_dir / "scene_assets",
         provider=config.image_provider,
-        openai_model=config.openai_image_model,
-        openai_size=config.openai_image_size,
     )
     metadata["visual_assets"] = [asset.to_dict() for asset in visual_assets]
 
@@ -121,8 +119,6 @@ def run(args: argparse.Namespace) -> int:
             fallback_path=output_dir / "silent_voice.wav",
             fallback_duration_seconds=config.video_length_seconds,
             attempts=config.tts_attempts,
-            openai_model=config.openai_tts_model,
-            openai_voice=config.openai_tts_voice,
             edge_voice=config.edge_tts_voice,
             edge_rate=config.edge_tts_rate,
             edge_pitch=config.edge_tts_pitch,
@@ -178,8 +174,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--topic", help="Documentary topic. Defaults to DOCUMENTARY_TOPIC or the first daily topic.")
     run_parser.add_argument("--scene-count", type=int, help="Number of documentary scenes. Production default is 30.")
     run_parser.add_argument("--duration-seconds", type=int, help="Video duration. Production default is 480 seconds.")
-    run_parser.add_argument("--tts-provider", choices=["openai", "edge", "silent"], help="Voice provider.")
-    run_parser.add_argument("--image-provider", choices=["openai", "fallback"], help="Visual provider.")
+    run_parser.add_argument("--tts-provider", choices=["edge", "silent"], help="Voice provider.")
+    run_parser.add_argument("--image-provider", choices=["wikimedia", "fallback"], help="Visual provider.")
     run_parser.add_argument("--allow-short-render", action="store_true", help="Allow short renders for local smoke tests.")
     run_parser.add_argument(
         "--no-voice",
