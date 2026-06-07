@@ -45,6 +45,12 @@ Render a short local smoke test without voice generation:
 youtube-daily run --offline --no-voice --allow-short-render --scene-count 3 --duration-seconds 12 --transition-style slide
 ```
 
+Allow a Wikimedia run to continue with fallback cards if fewer than 60% of scenes get real images:
+
+```bash
+youtube-daily run --allow-fallback
+```
+
 Render and upload:
 
 ```bash
@@ -105,6 +111,7 @@ Each run writes:
 - `scene_assets/wikimedia_scene_XX.png`: downloaded Wikimedia Commons images when available.
 - `scene_assets/cache/*.png`: cached Wikimedia downloads reused across runs.
 - `scene_assets/scene_XX.png`: fallback Pillow art cards when Wikimedia images are unavailable.
+- `metadata.json`: visual summary, including image providers, source URLs, licenses, and fallback counts.
 - `narration.txt`: full narration sent to TTS.
 - `subtitles.srt`: timed subtitles.
 - `background_music.wav`: generated music bed.
@@ -115,3 +122,5 @@ Each run writes:
 ```bash
 python -m pytest
 ```
+
+Wikimedia runs fail by default when fewer than 60% of scenes receive real images. Use `--allow-fallback` only when fallback art cards are acceptable.

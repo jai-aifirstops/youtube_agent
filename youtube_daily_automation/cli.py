@@ -99,6 +99,7 @@ def run(args: argparse.Namespace) -> int:
         "narration_speed": config.edge_tts_rate,
         "music_volume": config.music_volume,
         "transition_style": config.transition_style,
+        "allow_fallback": args.allow_fallback,
         "topics": [topic.__dict__ for topic in topics],
         "dry_run": args.dry_run,
     }
@@ -116,6 +117,7 @@ def run(args: argparse.Namespace) -> int:
         plan,
         output_dir / "scene_assets",
         provider=config.image_provider,
+        allow_fallback=args.allow_fallback,
     )
     metadata["visual_assets"] = [asset.to_dict() for asset in visual_assets]
 
@@ -190,6 +192,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--narration-speed", help="Edge TTS narration speed, such as -10%, +0%, or +15%.")
     run_parser.add_argument("--music-volume", type=float, help="Background music mix volume from 0.0 to 1.0.")
     run_parser.add_argument("--transition-style", choices=["fade", "crossfade", "slide"], help="Scene transition style.")
+    run_parser.add_argument("--allow-fallback", action="store_true", help="Allow Wikimedia runs to continue below 60% real-image coverage.")
     run_parser.add_argument("--allow-short-render", action="store_true", help="Allow short renders for local smoke tests.")
     run_parser.add_argument(
         "--no-voice",

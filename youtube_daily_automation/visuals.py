@@ -7,6 +7,7 @@ import textwrap
 from dataclasses import asdict, dataclass
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -14,8 +15,11 @@ from .documentary import DocumentaryPlan, DocumentaryScene
 
 
 COMMONS_API_URL = "https://commons.wikimedia.org/w/api.php"
+WIKIPEDIA_SUMMARY_URL = "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
+USER_AGENT = "youtube-agent/0.1 (https://github.com/jai-aifirstops/youtube_agent; free documentary automation)"
 VIDEO_SIZE = (1920, 1080)
 ARTWORK_SIZE = (2304, 1296)
+MIN_REAL_IMAGE_RATIO = 0.60
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,7 @@ class SceneVisualAsset:
     license_name: str | None = None
     artist: str | None = None
     search_query: str | None = None
+    image_url: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -39,39 +44,71 @@ def prepare_scene_visual_assets(
     assets_dir: Path,
     *,
     provider: str,
+    allow_fallback: bool = False,
 ) -> list[SceneVisualAsset]:
     assets_dir.mkdir(parents=True, exist_ok=True)
     if provider == "fallback":
-        return _generate_fallback_assets(plan, assets_dir)
+        assets = _generate_fallback_assets(plan, assets_dir)
+        _log_visual_summary(assets)
+        return assets
     if provider != "wikimedia":
         raise ValueError("IMAGE_PROVIDER must be wikimedia or fallback.")
-    return [_wikimedia_asset_or_fallback(scene, assets_dir) for scene in plan.scenes]
+    assets = [_wikimedia_asset_or_fallback(scene, assets_dir, topic=_topic_from_plan(plan)) for scene in plan.scenes]
+    _log_visual_summary(assets)
+    real_count = _real_image_count(assets)
+    required_count = int(len(assets) * MIN_REAL_IMAGE_RATIO + 0.999)
+    if real_count < required_count and not allow_fallback:
+        raise RuntimeError(
+            "Wikimedia image coverage too low: "
+            f"{real_count}/{len(assets)} real images downloaded; at least {required_count} required. "
+            "Re-run with --allow-fallback to permit fallback cards."
+        )
+    return assets
 
 
-def _wikimedia_asset_or_fallback(scene: DocumentaryScene, assets_dir: Path) -> SceneVisualAsset:
+def _wikimedia_asset_or_fallback(scene: DocumentaryScene, assets_dir: Path, *, topic: str) -> SceneVisualAsset:
     query = _search_query(scene)
     try:
-        result = _search_wikimedia_image(query)
+        result = _find_real_image(scene, topic=topic)
         if result is None:
-            raise RuntimeError("No Wikimedia image result found.")
-        output_path = assets_dir / f"wikimedia_scene_{scene.number:02d}.png"
-        _download_cached_image(result["url"], output_path, assets_dir / "cache", cache_key=query)
+            raise RuntimeError("No Wikimedia or Wikipedia image result found.")
+        output_path = assets_dir / f"{result['provider']}_scene_{scene.number:02d}.png"
+        _download_cached_image(result["url"], output_path, assets_dir / "cache", cache_key=result["query"])
         return SceneVisualAsset(
             scene_number=scene.number,
             path=str(output_path),
-            provider="wikimedia",
+            provider=result["provider"],
             prompt=scene.image_prompt,
             source_title=result.get("title"),
             source_url=result.get("description_url"),
             license_name=result.get("license"),
             artist=result.get("artist"),
-            search_query=query,
+            search_query=result.get("query"),
+            image_url=result.get("url"),
         )
     except Exception as error:
         print(f"Wikimedia image lookup failed for scene {scene.number}; using fallback art card. Last error: {error}")
         output_path = assets_dir / f"scene_{scene.number:02d}.png"
         _create_fallback_art_card(scene, output_path)
         return SceneVisualAsset(scene.number, str(output_path), "fallback", scene.image_prompt, search_query=query)
+
+
+def _find_real_image(scene: DocumentaryScene, *, topic: str) -> dict | None:
+    queries = _query_candidates(scene, topic=topic)
+    for query in queries:
+        result = _search_wikimedia_image(query)
+        if result:
+            result["query"] = query
+            result["provider"] = "wikimedia"
+            return result
+
+    for query in queries:
+        result = _wikipedia_summary_image(query)
+        if result:
+            result["query"] = query
+            result["provider"] = "wikipedia"
+            return result
+    return None
 
 
 def _search_wikimedia_image(query: str) -> dict | None:
@@ -90,13 +127,13 @@ def _search_wikimedia_image(query: str) -> dict | None:
             "iiurlwidth": 1920,
             "iiurlheight": 1080,
             "format": "json",
-            "formatversion": 2,
         },
-        headers={"User-Agent": "youtube-agent/0.1 (free documentary automation)"},
+        headers={"User-Agent": USER_AGENT},
         timeout=30,
     )
     response.raise_for_status()
-    pages = response.json().get("query", {}).get("pages", [])
+    pages_payload = response.json().get("query", {}).get("pages", {})
+    pages = pages_payload.values() if isinstance(pages_payload, dict) else pages_payload
     for page in pages:
         imageinfo = (page.get("imageinfo") or [{}])[0]
         if imageinfo.get("mime") not in {"image/jpeg", "image/png", "image/webp"}:
@@ -110,6 +147,28 @@ def _search_wikimedia_image(query: str) -> dict | None:
             "artist": _metadata_value(metadata.get("Artist")),
         }
     return None
+
+
+def _wikipedia_summary_image(query: str) -> dict | None:
+    import requests
+
+    title = quote(query.replace(" ", "_"), safe="")
+    response = requests.get(WIKIPEDIA_SUMMARY_URL.format(title=title), headers={"User-Agent": USER_AGENT}, timeout=30)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    payload = response.json()
+    image = payload.get("thumbnail") or payload.get("originalimage")
+    url = image.get("source") if isinstance(image, dict) else None
+    if not url:
+        return None
+    return {
+        "title": payload.get("title"),
+        "url": url,
+        "description_url": (payload.get("content_urls") or {}).get("desktop", {}).get("page"),
+        "license": "Wikipedia summary thumbnail",
+        "artist": None,
+    }
 
 
 def _download_cached_image(url: str, output_path: Path, cache_dir: Path, *, cache_key: str) -> Path:
@@ -127,7 +186,7 @@ def _download_cached_image(url: str, output_path: Path, cache_dir: Path, *, cach
 def _download_and_fit_image(url: str, output_path: Path) -> Path:
     import requests
 
-    response = requests.get(url, headers={"User-Agent": "youtube-agent/0.1"}, timeout=60)
+    response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=60)
     response.raise_for_status()
     image = Image.open(BytesIO(response.content)).convert("RGB")
     ImageOps.fit(image, VIDEO_SIZE, method=Image.Resampling.LANCZOS).save(output_path)
@@ -139,6 +198,26 @@ def _search_query(scene: DocumentaryScene) -> str:
     title_words = _keywords(title, limit=4)
     narration_words = _keywords(scene.narration, limit=4)
     return " ".join(dict.fromkeys([*title_words, *narration_words])) or title or scene.title
+
+
+def _query_candidates(scene: DocumentaryScene, *, topic: str) -> list[str]:
+    title = scene.title.split(":", 1)[-1].strip()
+    topic_keywords = _keywords(topic, limit=3)
+    title_keywords = _keywords(title, limit=4)
+    narration_keywords = _keywords(scene.narration, limit=4)
+    candidates = [
+        _search_query(scene),
+        " ".join([*title_keywords, *topic_keywords]),
+        title,
+        " ".join([*topic_keywords, *narration_keywords[:2]]),
+        topic,
+        " ".join(topic_keywords),
+    ]
+    return [candidate for candidate in dict.fromkeys(c.strip() for c in candidates) if candidate]
+
+
+def _topic_from_plan(plan: DocumentaryPlan) -> str:
+    return plan.title.split(":", 1)[0].strip() or plan.title
 
 
 def _keywords(text: str, *, limit: int) -> list[str]:
@@ -171,6 +250,22 @@ def _keywords(text: str, *, limit: int) -> list[str]:
         if len(keywords) == limit:
             break
     return keywords
+
+
+def _log_visual_summary(assets: list[SceneVisualAsset]) -> None:
+    real_assets = [asset for asset in assets if asset.provider in {"wikimedia", "wikipedia"}]
+    fallback_assets = [asset for asset in assets if asset.provider == "fallback"]
+    print("Visual asset summary:")
+    print(f"  total scenes: {len(assets)}")
+    print(f"  images downloaded: {len(real_assets)}")
+    print(f"  fallback cards used: {len(fallback_assets)}")
+    print("  image URLs:")
+    for asset in real_assets:
+        print(f"    scene {asset.scene_number:02d}: {asset.image_url or asset.source_url}")
+
+
+def _real_image_count(assets: list[SceneVisualAsset]) -> int:
+    return sum(1 for asset in assets if asset.provider in {"wikimedia", "wikipedia"})
 
 
 def _slug(value: str) -> str:

@@ -116,6 +116,7 @@ def test_visual_assets_fall_back_when_wikimedia_has_no_result(monkeypatch, tmp_p
         plan,
         tmp_path / "scene_assets",
         provider="wikimedia",
+        allow_fallback=True,
     )
 
     assert [asset.provider for asset in assets] == ["fallback", "fallback"]
@@ -180,12 +181,71 @@ def test_visual_assets_download_wikimedia_images(monkeypatch, tmp_path) -> None:
         plan,
         tmp_path / "scene_assets",
         provider="wikimedia",
+        allow_fallback=False,
     )
 
     assert assets[0].provider == "wikimedia"
     assert assets[0].path.endswith("wikimedia_scene_01.png")
     assert assets[0].license_name == "CC BY-SA 4.0"
+    assert assets[0].image_url == "https://example.test/ocean.png"
     assert (tmp_path / "scene_assets" / "wikimedia_scene_01.png").exists()
+
+
+def test_visual_assets_fall_back_to_wikipedia_summary(monkeypatch, tmp_path) -> None:
+    image = Image.new("RGB", (16, 9), color=(25, 50, 75))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    image_bytes = buffer.getvalue()
+
+    class EmptyCommonsResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"query": {"pages": []}}
+
+    class SummaryResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "title": "Ocean",
+                "thumbnail": {"source": "https://example.test/ocean-summary.png"},
+                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Ocean"}},
+            }
+
+    class FakeImageResponse:
+        content = image_bytes
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, *args, **kwargs):
+        if "commons.wikimedia.org" in url:
+            return EmptyCommonsResponse()
+        if "api/rest_v1/page/summary" in url:
+            return SummaryResponse()
+        return FakeImageResponse()
+
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(get=fake_get))
+    plan = build_documentary_plan(
+        topic="Ocean mysteries",
+        day=dt.date(2026, 6, 6),
+        source_topics=fetch_daily_topics(dt.date(2026, 6, 6), offline=True),
+        scene_count=1,
+        duration_seconds=4,
+        channel_name="Test Channel",
+    )
+
+    assets = prepare_scene_visual_assets(plan, tmp_path / "scene_assets", provider="wikimedia")
+
+    assert assets[0].provider == "wikipedia"
+    assert assets[0].source_url == "https://en.wikipedia.org/wiki/Ocean"
+    assert assets[0].image_url == "https://example.test/ocean-summary.png"
+    assert (tmp_path / "scene_assets" / "wikipedia_scene_01.png").exists()
 
 
 def test_visual_assets_cache_downloaded_wikimedia_images(monkeypatch, tmp_path) -> None:
@@ -248,6 +308,34 @@ def test_visual_assets_cache_downloaded_wikimedia_images(monkeypatch, tmp_path) 
     assert list((tmp_path / "scene_assets" / "cache").glob("*.png"))
 
 
+def test_wikimedia_threshold_requires_allow_fallback(monkeypatch, tmp_path) -> None:
+    class EmptyResponse:
+        status_code = 404
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"query": {"pages": []}}
+
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(get=lambda *args, **kwargs: EmptyResponse()))
+    plan = build_documentary_plan(
+        topic="Ocean Mysteries",
+        day=dt.date(2026, 6, 6),
+        source_topics=fetch_daily_topics(dt.date(2026, 6, 6), offline=True),
+        scene_count=2,
+        duration_seconds=8,
+        channel_name="Test Channel",
+    )
+
+    try:
+        prepare_scene_visual_assets(plan, tmp_path / "scene_assets", provider="wikimedia")
+    except RuntimeError as error:
+        assert "coverage too low" in str(error)
+    else:
+        raise AssertionError("Expected low Wikimedia coverage to fail without allow_fallback.")
+
+
 def test_edge_tts_success_writes_voice_file(monkeypatch, tmp_path) -> None:
     async def edge_tts(text, output_path, **kwargs):
         output_path.write_bytes(b"edge voice")
@@ -307,7 +395,7 @@ def test_skip_tts_alias_skips_tts_and_continues_to_render(monkeypatch, tmp_path)
         kwargs["output_path"].write_bytes(b"fake video")
         return kwargs["output_path"]
 
-    def fake_visual_assets(plan, assets_dir, *, provider):
+    def fake_visual_assets(plan, assets_dir, *, provider, allow_fallback):
         assets_dir.mkdir(parents=True, exist_ok=True)
         return [
             types.SimpleNamespace(path=str(assets_dir / f"scene_{scene.number:02d}.png"), to_dict=lambda scene=scene: {"scene_number": scene.number})
@@ -370,7 +458,7 @@ def test_tts_failure_falls_back_and_does_not_block_upload(monkeypatch, tmp_path)
         uploads.append({"video_path": video_path, **kwargs})
         return "https://youtube.example/watch?v=test"
 
-    def fake_visual_assets(plan, assets_dir, *, provider):
+    def fake_visual_assets(plan, assets_dir, *, provider, allow_fallback):
         assets_dir.mkdir(parents=True, exist_ok=True)
         return [
             types.SimpleNamespace(path=str(assets_dir / f"scene_{scene.number:02d}.png"), to_dict=lambda scene=scene: {"scene_number": scene.number})
