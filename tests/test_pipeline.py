@@ -64,6 +64,12 @@ def test_cli_dry_run_writes_documentary_assets(tmp_path) -> None:
             "3",
             "--duration-seconds",
             "12",
+            "--narration-speed",
+            "+12%",
+            "--music-volume",
+            "0.25",
+            "--transition-style",
+            "slide",
             "--topic",
             "Deep Sea Signals",
             "--date",
@@ -81,6 +87,9 @@ def test_cli_dry_run_writes_documentary_assets(tmp_path) -> None:
     assert metadata["duration_seconds"] == 12
     assert metadata["dry_run"] is True
     assert metadata["image_provider"] == "wikimedia"
+    assert metadata["narration_speed"] == "+12%"
+    assert metadata["music_volume"] == 0.25
+    assert metadata["transition_style"] == "slide"
     assert len(prompts) == 3
     assert (tmp_path / "subtitles.srt").exists()
 
@@ -177,6 +186,66 @@ def test_visual_assets_download_wikimedia_images(monkeypatch, tmp_path) -> None:
     assert assets[0].path.endswith("wikimedia_scene_01.png")
     assert assets[0].license_name == "CC BY-SA 4.0"
     assert (tmp_path / "scene_assets" / "wikimedia_scene_01.png").exists()
+
+
+def test_visual_assets_cache_downloaded_wikimedia_images(monkeypatch, tmp_path) -> None:
+    image = Image.new("RGB", (16, 9), color=(25, 50, 75))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    image_bytes = buffer.getvalue()
+    image_downloads = []
+
+    class FakeApiResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "query": {
+                    "pages": [
+                        {
+                            "title": "File:Ocean.jpg",
+                            "imageinfo": [
+                                {
+                                    "mime": "image/jpeg",
+                                    "thumburl": "https://example.test/ocean-thumb.png",
+                                    "url": "https://example.test/ocean.png",
+                                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Ocean.jpg",
+                                    "extmetadata": {},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+
+    class FakeImageResponse:
+        content = image_bytes
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, *args, **kwargs):
+        if "commons.wikimedia.org" in url:
+            return FakeApiResponse()
+        image_downloads.append(url)
+        return FakeImageResponse()
+
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(get=fake_get))
+    plan = build_documentary_plan(
+        topic="Ocean Mysteries",
+        day=dt.date(2026, 6, 6),
+        source_topics=fetch_daily_topics(dt.date(2026, 6, 6), offline=True),
+        scene_count=1,
+        duration_seconds=4,
+        channel_name="Test Channel",
+    )
+
+    prepare_scene_visual_assets(plan, tmp_path / "scene_assets", provider="wikimedia")
+    prepare_scene_visual_assets(plan, tmp_path / "scene_assets", provider="wikimedia")
+
+    assert image_downloads == ["https://example.test/ocean-thumb.png"]
+    assert list((tmp_path / "scene_assets" / "cache").glob("*.png"))
 
 
 def test_edge_tts_success_writes_voice_file(monkeypatch, tmp_path) -> None:
@@ -278,6 +347,8 @@ def test_skip_tts_alias_skips_tts_and_continues_to_render(monkeypatch, tmp_path)
     assert len(render_calls) == 1
     assert render_calls[0]["voice_path"] is None
     assert len(render_calls[0]["scene_image_paths"]) == 3
+    assert render_calls[0]["music_volume"] == 0.18
+    assert render_calls[0]["transition_style"] == "crossfade"
 
 
 def test_tts_failure_falls_back_and_does_not_block_upload(monkeypatch, tmp_path) -> None:

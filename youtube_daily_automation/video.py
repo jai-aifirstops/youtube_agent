@@ -23,7 +23,9 @@ def render_documentary_video(
     duration_seconds: int,
     subtitles_path: Path,
     scene_image_paths: list[Path] | None = None,
+    music_volume: float = 0.18,
     transition_seconds: float = 1.0,
+    transition_style: str = "crossfade",
 ) -> Path:
     if not plan.scenes:
         raise ValueError("Cannot render a documentary without scenes.")
@@ -49,12 +51,14 @@ def render_documentary_video(
         clip = CompositeVideoClip([artwork, subtitle], size=VIDEO_SIZE)
         clip = _with_duration(_with_fps(clip, 30), duration)
         fade_seconds = min(transition_seconds, max(duration / 4, 0.1))
-        clip = clip.with_effects([FadeIn(fade_seconds), FadeOut(fade_seconds)])
+        clip = _apply_scene_transition(clip, style=transition_style, fade_seconds=fade_seconds, index=index)
         clips.append(clip)
 
-    video = _with_duration(concatenate_videoclips(clips, method="compose"), duration_seconds)
+    padding = -transition_seconds if transition_style == "crossfade" and len(clips) > 1 else 0
+    video = concatenate_videoclips(clips, method="compose", padding=padding)
+    video = _with_duration(video, duration_seconds)
 
-    audio_tracks = [_volume(_fit_audio_duration(AudioFileClip(str(music_path)), duration_seconds), 0.18)]
+    audio_tracks = [_volume(_fit_audio_duration(AudioFileClip(str(music_path)), duration_seconds), music_volume)]
     if voice_path:
         audio_tracks.insert(0, _fit_audio_duration(AudioFileClip(str(voice_path)), duration_seconds))
 
@@ -75,6 +79,19 @@ def render_documentary_video(
         track.close()
 
     return output_path
+
+
+def _apply_scene_transition(clip, *, style: str, fade_seconds: float, index: int):
+    try:
+        from moviepy.video.fx import FadeIn, FadeOut
+    except ImportError:  # pragma: no cover - supports MoviePy 1.x.
+        from moviepy.video.fx import FadeIn, FadeOut
+
+    if style == "crossfade":
+        return clip.with_effects([FadeIn(fade_seconds), FadeOut(fade_seconds)])
+    if style == "slide":
+        return _slide_clip(clip, fade_seconds=fade_seconds, index=index).with_effects([FadeIn(fade_seconds / 2), FadeOut(fade_seconds / 2)])
+    return clip.with_effects([FadeIn(fade_seconds), FadeOut(fade_seconds)])
 
 
 def render_video(*args, **kwargs) -> Path:
@@ -161,6 +178,23 @@ def _animate_artwork(clip, *, duration: float, index: int):
         return (x, y)
 
     return _with_position(_with_duration(clip.resized(scale), duration), position)
+
+
+def _slide_clip(clip, *, fade_seconds: float, index: int):
+    duration = max(getattr(clip, "duration", 0) or 0, 0.1)
+    slide_time = min(fade_seconds, duration / 3)
+    direction = -1 if index % 2 else 1
+
+    def position(t):
+        if t < slide_time:
+            progress = t / slide_time
+            return (direction * VIDEO_SIZE[0] * (1 - progress), 0)
+        if t > duration - slide_time:
+            progress = (t - (duration - slide_time)) / slide_time
+            return (-direction * VIDEO_SIZE[0] * progress, 0)
+        return (0, 0)
+
+    return _with_position(clip, position)
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:

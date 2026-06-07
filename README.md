@@ -10,7 +10,7 @@ Important: automation cannot create a YouTube account or channel for you. Create
 - Writes a documentary-style script.
 - Splits the story into 20-30 scenes.
 - Searches Wikimedia Commons for each scene.
-- Downloads one relevant free Wikimedia image per scene when available.
+- Downloads and caches one relevant free Wikimedia image per scene when available.
 - Falls back to local Pillow art cards only when Wikimedia lookup or download fails.
 - Generates narration with free Edge TTS, then silent placeholder audio if TTS fails.
 - Generates royalty-free background music locally.
@@ -42,7 +42,7 @@ youtube-daily run
 Render a short local smoke test without voice generation:
 
 ```bash
-youtube-daily run --offline --no-voice --allow-short-render --scene-count 3 --duration-seconds 12
+youtube-daily run --offline --no-voice --allow-short-render --scene-count 3 --duration-seconds 12 --transition-style slide
 ```
 
 Render and upload:
@@ -69,6 +69,9 @@ youtube-daily auth --client-secret-file client_secret.json --token-file token.js
    - `DOCUMENTARY_TOPIC`: topic override for the next run.
    - `TTS_PROVIDER`: `edge` or `silent` (defaults to `edge`).
    - `IMAGE_PROVIDER`: `wikimedia` or `fallback` (defaults to `wikimedia`).
+   - `EDGE_TTS_RATE`: narration speed such as `-10%`, `+0%`, or `+15%`.
+   - `MUSIC_VOLUME`: background music mix volume from `0.0` to `1.0`.
+   - `TRANSITION_STYLE`: `fade`, `crossfade`, or `slide`.
 
 ## Environment variables
 
@@ -84,10 +87,12 @@ youtube-daily auth --client-secret-file client_secret.json --token-file token.js
 | `IMAGE_PROVIDER` | `wikimedia` | `wikimedia` or `fallback` visual provider |
 | `TTS_PROVIDER` | `edge` | `edge` or `silent` |
 | `EDGE_TTS_VOICE` | `en-US-GuyNeural` | Edge narration voice |
-| `EDGE_TTS_RATE` | `+0%` | Edge speech rate |
+| `EDGE_TTS_RATE` | `+0%` | Edge narration speed |
 | `EDGE_TTS_PITCH` | `+0Hz` | Edge speech pitch |
 | `TTS_ATTEMPTS` | `3` | Provider retry attempts before silent fallback |
+| `MUSIC_VOLUME` | `0.18` | Background music mix volume |
 | `TRANSITION_SECONDS` | `1.0` | Fade transition length |
+| `TRANSITION_STYLE` | `crossfade` | `fade`, `crossfade`, or `slide` |
 | `YOUTUBE_TOKEN_JSON` | unset | Authorized token JSON for CI uploads |
 | `YOUTUBE_TOKEN_FILE` | unset | Local token file path |
 
@@ -96,8 +101,9 @@ youtube-daily auth --client-secret-file client_secret.json --token-file token.js
 Each run writes:
 
 - `documentary_plan.json`: complete title, description, scenes, narration, and prompts.
-- `image_prompts.json`: one AI image prompt per scene.
+- `image_prompts.json`: one visual search prompt per scene.
 - `scene_assets/wikimedia_scene_XX.png`: downloaded Wikimedia Commons images when available.
+- `scene_assets/cache/*.png`: cached Wikimedia downloads reused across runs.
 - `scene_assets/scene_XX.png`: fallback Pillow art cards when Wikimedia images are unavailable.
 - `narration.txt`: full narration sent to TTS.
 - `subtitles.srt`: timed subtitles.

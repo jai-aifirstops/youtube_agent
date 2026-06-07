@@ -51,6 +51,12 @@ def run(args: argparse.Namespace) -> int:
         config = replace(config, tts_provider=args.tts_provider)
     if args.image_provider:
         config = replace(config, image_provider=args.image_provider)
+    if args.narration_speed:
+        config = replace(config, edge_tts_rate=args.narration_speed)
+    if args.music_volume is not None:
+        config = replace(config, music_volume=args.music_volume)
+    if args.transition_style:
+        config = replace(config, transition_style=args.transition_style)
     if not args.allow_short_render:
         config.validate_for_documentary()
 
@@ -90,6 +96,9 @@ def run(args: argparse.Namespace) -> int:
         "duration_seconds": config.video_length_seconds,
         "tts_provider": config.tts_provider,
         "image_provider": config.image_provider,
+        "narration_speed": config.edge_tts_rate,
+        "music_volume": config.music_volume,
+        "transition_style": config.transition_style,
         "topics": [topic.__dict__ for topic in topics],
         "dry_run": args.dry_run,
     }
@@ -139,7 +148,9 @@ def run(args: argparse.Namespace) -> int:
         duration_seconds=config.video_length_seconds,
         subtitles_path=subtitles_path,
         scene_image_paths=[Path(asset.path) for asset in visual_assets],
+        music_volume=config.music_volume,
         transition_seconds=config.transition_seconds,
+        transition_style=config.transition_style,
     )
     metadata["video_file"] = str(video_path)
 
@@ -172,10 +183,13 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--dry-run", action="store_true", help="Write script and metadata without TTS, video, or upload.")
     run_parser.add_argument("--upload", action="store_true", help="Upload the rendered video to YouTube.")
     run_parser.add_argument("--topic", help="Documentary topic. Defaults to DOCUMENTARY_TOPIC or the first daily topic.")
-    run_parser.add_argument("--scene-count", type=int, help="Number of documentary scenes. Production default is 30.")
-    run_parser.add_argument("--duration-seconds", type=int, help="Video duration. Production default is 480 seconds.")
+    run_parser.add_argument("--scene-count", type=int, help="Number of documentary scenes. Production default is 24.")
+    run_parser.add_argument("--duration-seconds", type=int, help="Video duration. Production default is 360 seconds.")
     run_parser.add_argument("--tts-provider", choices=["edge", "silent"], help="Voice provider.")
     run_parser.add_argument("--image-provider", choices=["wikimedia", "fallback"], help="Visual provider.")
+    run_parser.add_argument("--narration-speed", help="Edge TTS narration speed, such as -10%, +0%, or +15%.")
+    run_parser.add_argument("--music-volume", type=float, help="Background music mix volume from 0.0 to 1.0.")
+    run_parser.add_argument("--transition-style", choices=["fade", "crossfade", "slide"], help="Scene transition style.")
     run_parser.add_argument("--allow-short-render", action="store_true", help="Allow short renders for local smoke tests.")
     run_parser.add_argument(
         "--no-voice",

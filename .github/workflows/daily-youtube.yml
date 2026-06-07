@@ -30,4 +30,7 @@ jobs:
           DOCUMENTARY_TOPIC: ${{ vars.DOCUMENTARY_TOPIC || '' }}
           TTS_PROVIDER: ${{ vars.TTS_PROVIDER || 'edge' }}
           IMAGE_PROVIDER: ${{ vars.IMAGE_PROVIDER || 'wikimedia' }}
+          EDGE_TTS_RATE: ${{ vars.EDGE_TTS_RATE || '+0%' }}
+          MUSIC_VOLUME: ${{ vars.MUSIC_VOLUME || '0.18' }}
+          TRANSITION_STYLE: ${{ vars.TRANSITION_STYLE || 'crossfade' }}
         run: youtube-daily run --upload

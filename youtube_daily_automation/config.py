@@ -23,7 +23,9 @@ class AutomationConfig:
     edge_tts_pitch: str = "+0Hz"
     tts_attempts: int = 3
     image_provider: str = "wikimedia"
+    music_volume: float = 0.18
     transition_seconds: float = 1.0
+    transition_style: str = "crossfade"
 
     @classmethod
     def from_env(cls, *, output_dir: str | None = None) -> "AutomationConfig":
@@ -42,7 +44,9 @@ class AutomationConfig:
             edge_tts_pitch=os.getenv("EDGE_TTS_PITCH", "+0Hz"),
             tts_attempts=int(os.getenv("TTS_ATTEMPTS", "3")),
             image_provider=os.getenv("IMAGE_PROVIDER", "wikimedia").lower(),
+            music_volume=float(os.getenv("MUSIC_VOLUME", "0.18")),
             transition_seconds=float(os.getenv("TRANSITION_SECONDS", "1.0")),
+            transition_style=os.getenv("TRANSITION_STYLE", "crossfade").lower(),
         )
 
     def ensure_output_dir(self) -> Path:
@@ -54,3 +58,5 @@ class AutomationConfig:
             raise ValueError("Documentary videos must be 5-8 minutes long unless --allow-short-render is used.")
         if not 20 <= self.scene_count <= 30:
             raise ValueError("Documentary videos must use 20-30 scenes unless --allow-short-render is used.")
+        if self.transition_style not in {"fade", "crossfade", "slide"}:
+            raise ValueError("TRANSITION_STYLE must be fade, crossfade, or slide.")

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import re
+import shutil
 import textwrap
 from dataclasses import asdict, dataclass
 from io import BytesIO
@@ -25,6 +28,7 @@ class SceneVisualAsset:
     source_url: str | None = None
     license_name: str | None = None
     artist: str | None = None
+    search_query: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -45,12 +49,13 @@ def prepare_scene_visual_assets(
 
 
 def _wikimedia_asset_or_fallback(scene: DocumentaryScene, assets_dir: Path) -> SceneVisualAsset:
+    query = _search_query(scene)
     try:
-        result = _search_wikimedia_image(_search_query(scene))
+        result = _search_wikimedia_image(query)
         if result is None:
             raise RuntimeError("No Wikimedia image result found.")
         output_path = assets_dir / f"wikimedia_scene_{scene.number:02d}.png"
-        _download_and_fit_image(result["url"], output_path)
+        _download_cached_image(result["url"], output_path, assets_dir / "cache", cache_key=query)
         return SceneVisualAsset(
             scene_number=scene.number,
             path=str(output_path),
@@ -60,12 +65,13 @@ def _wikimedia_asset_or_fallback(scene: DocumentaryScene, assets_dir: Path) -> S
             source_url=result.get("description_url"),
             license_name=result.get("license"),
             artist=result.get("artist"),
+            search_query=query,
         )
     except Exception as error:
         print(f"Wikimedia image lookup failed for scene {scene.number}; using fallback art card. Last error: {error}")
         output_path = assets_dir / f"scene_{scene.number:02d}.png"
         _create_fallback_art_card(scene, output_path)
-        return SceneVisualAsset(scene.number, str(output_path), "fallback", scene.image_prompt)
+        return SceneVisualAsset(scene.number, str(output_path), "fallback", scene.image_prompt, search_query=query)
 
 
 def _search_wikimedia_image(query: str) -> dict | None:
@@ -106,6 +112,18 @@ def _search_wikimedia_image(query: str) -> dict | None:
     return None
 
 
+def _download_cached_image(url: str, output_path: Path, cache_dir: Path, *, cache_key: str) -> Path:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"{_slug(cache_key)}_{hashlib.sha256(url.encode('utf-8')).hexdigest()[:12]}.png"
+    if cache_path.exists():
+        shutil.copyfile(cache_path, output_path)
+        return output_path
+
+    _download_and_fit_image(url, cache_path)
+    shutil.copyfile(cache_path, output_path)
+    return output_path
+
+
 def _download_and_fit_image(url: str, output_path: Path) -> Path:
     import requests
 
@@ -118,8 +136,46 @@ def _download_and_fit_image(url: str, output_path: Path) -> Path:
 
 def _search_query(scene: DocumentaryScene) -> str:
     title = scene.title.split(":", 1)[-1].strip()
-    title = " ".join(word for word in title.split() if len(word) > 2)
-    return title or scene.title
+    title_words = _keywords(title, limit=4)
+    narration_words = _keywords(scene.narration, limit=4)
+    return " ".join(dict.fromkeys([*title_words, *narration_words])) or title or scene.title
+
+
+def _keywords(text: str, *, limit: int) -> list[str]:
+    stop_words = {
+        "about",
+        "after",
+        "another",
+        "before",
+        "begins",
+        "documentary",
+        "every",
+        "layer",
+        "reveals",
+        "scene",
+        "story",
+        "their",
+        "there",
+        "these",
+        "those",
+        "through",
+        "with",
+    }
+    words = re.findall(r"[A-Za-z][A-Za-z-]{2,}", text)
+    keywords = []
+    for word in words:
+        normalized = word.lower()
+        if normalized in stop_words:
+            continue
+        keywords.append(word)
+        if len(keywords) == limit:
+            break
+    return keywords
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:60] or "wikimedia-image"
 
 
 def _metadata_value(value: object) -> str | None:
