@@ -22,6 +22,7 @@ def render_documentary_video(
     music_path: Path,
     duration_seconds: int,
     subtitles_path: Path,
+    scene_image_paths: list[Path] | None = None,
     transition_seconds: float = 1.0,
 ) -> Path:
     if not plan.scenes:
@@ -35,7 +36,9 @@ def render_documentary_video(
         from moviepy.video.fx import FadeIn, FadeOut
 
     assets_dir.mkdir(parents=True, exist_ok=True)
-    scene_paths = [_create_scene_art(scene, assets_dir / f"scene_{scene.number:02d}.png") for scene in plan.scenes]
+    scene_paths = scene_image_paths or [_create_scene_art(scene, assets_dir / f"scene_{scene.number:02d}.png") for scene in plan.scenes]
+    if len(scene_paths) != len(plan.scenes):
+        raise ValueError("scene_image_paths must contain one image per scene.")
     subtitle_paths = [_create_subtitle_card(scene, assets_dir / f"subtitle_{scene.number:02d}.png") for scene in plan.scenes]
 
     clips = []
@@ -137,14 +140,16 @@ def _create_subtitle_card(scene: DocumentaryScene, output_path: Path) -> Path:
 
 def _animate_artwork(clip, *, duration: float, index: int):
     duration = max(duration, 0.1)
+    base_width = getattr(clip, "w", ARTWORK_SIZE[0])
+    base_height = getattr(clip, "h", ARTWORK_SIZE[1])
 
     def scale(t):
         return 1.0 + 0.08 * (t / duration)
 
     def position(t):
         progress = t / duration
-        scaled_width = ARTWORK_SIZE[0] * scale(t)
-        scaled_height = ARTWORK_SIZE[1] * scale(t)
+        scaled_width = base_width * scale(t)
+        scaled_height = base_height * scale(t)
         max_x = VIDEO_SIZE[0] - scaled_width
         max_y = VIDEO_SIZE[1] - scaled_height
         if index % 2:

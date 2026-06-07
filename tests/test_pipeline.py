@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import datetime as dt
+import base64
 import json
 import sys
 import types
 import wave
+from io import BytesIO
 
+from PIL import Image
 from youtube_daily_automation import audio
 from youtube_daily_automation.cli import main
 from youtube_daily_automation.documentary import build_documentary_plan
 from youtube_daily_automation.subtitles import write_srt
 from youtube_daily_automation.topics import fetch_daily_topics
+from youtube_daily_automation.visuals import prepare_scene_visual_assets
 
 
 def test_documentary_plan_has_scene_prompts_and_narration() -> None:
@@ -77,18 +81,109 @@ def test_cli_dry_run_writes_documentary_assets(tmp_path) -> None:
     assert metadata["scene_count"] == 3
     assert metadata["duration_seconds"] == 12
     assert metadata["dry_run"] is True
+    assert metadata["image_provider"] == "openai"
     assert len(prompts) == 3
     assert (tmp_path / "subtitles.srt").exists()
 
 
-def test_openai_tts_failure_retries_and_writes_silent_fallback(monkeypatch, tmp_path) -> None:
+def test_visual_assets_fall_back_without_openai_key(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    plan = build_documentary_plan(
+        topic="Ocean Mysteries",
+        day=dt.date(2026, 6, 6),
+        source_topics=fetch_daily_topics(dt.date(2026, 6, 6), offline=True),
+        scene_count=2,
+        duration_seconds=8,
+        channel_name="Test Channel",
+    )
+
+    assets = prepare_scene_visual_assets(
+        plan,
+        tmp_path / "scene_assets",
+        provider="openai",
+        openai_model="dall-e-3",
+        openai_size="1792x1024",
+    )
+
+    assert [asset.provider for asset in assets] == ["fallback", "fallback"]
+    assert (tmp_path / "scene_assets" / "scene_01.png").exists()
+    assert not (tmp_path / "scene_assets" / "ai_scene_01.png").exists()
+
+
+def test_visual_assets_write_openai_images_when_key_exists(monkeypatch, tmp_path) -> None:
+    image = Image.new("RGB", (16, 9), color=(25, 50, 75))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"b64_json": encoded}]}
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(post=lambda *args, **kwargs: FakeResponse()))
+    plan = build_documentary_plan(
+        topic="Ocean Mysteries",
+        day=dt.date(2026, 6, 6),
+        source_topics=fetch_daily_topics(dt.date(2026, 6, 6), offline=True),
+        scene_count=1,
+        duration_seconds=4,
+        channel_name="Test Channel",
+    )
+
+    assets = prepare_scene_visual_assets(
+        plan,
+        tmp_path / "scene_assets",
+        provider="openai",
+        openai_model="dall-e-3",
+        openai_size="1792x1024",
+    )
+
+    assert assets[0].provider == "openai"
+    assert assets[0].path.endswith("ai_scene_01.png")
+    assert (tmp_path / "scene_assets" / "ai_scene_01.png").exists()
+
+
+def test_openai_tts_failure_falls_back_to_edge(monkeypatch, tmp_path) -> None:
     attempts: list[str] = []
 
     def fail_tts(*args, **kwargs):
         attempts.append("failed")
         raise RuntimeError("speech provider unavailable")
 
+    async def edge_tts(text, output_path, **kwargs):
+        output_path.write_bytes(b"edge voice")
+        return output_path
+
     monkeypatch.setattr(audio, "_openai_tts", fail_tts)
+    monkeypatch.setattr(audio, "synthesize_voice_async", edge_tts)
+    monkeypatch.setattr(audio.time, "sleep", lambda seconds: None)
+
+    output_path = tmp_path / "voice.mp3"
+    returned_path = audio.synthesize_documentary_voice(
+        "hello",
+        output_path,
+        provider="openai",
+        fallback_duration_seconds=2,
+    )
+
+    assert attempts == ["failed", "failed", "failed"]
+    assert returned_path == output_path
+    assert output_path.read_bytes() == b"edge voice"
+
+
+def test_all_tts_failures_write_silent_fallback(monkeypatch, tmp_path) -> None:
+    def fail_openai(*args, **kwargs):
+        raise RuntimeError("openai unavailable")
+
+    async def fail_edge(*args, **kwargs):
+        raise RuntimeError("edge unavailable")
+
+    monkeypatch.setattr(audio, "_openai_tts", fail_openai)
+    monkeypatch.setattr(audio, "synthesize_voice_async", fail_edge)
     monkeypatch.setattr(audio.time, "sleep", lambda seconds: None)
 
     output_path = tmp_path / "voice.mp3"
@@ -101,7 +196,6 @@ def test_openai_tts_failure_retries_and_writes_silent_fallback(monkeypatch, tmp_
         fallback_duration_seconds=2,
     )
 
-    assert attempts == ["failed", "failed", "failed"]
     assert returned_path == fallback_path
     assert not output_path.exists()
     with wave.open(str(fallback_path), "rb") as wav:
@@ -156,6 +250,7 @@ def test_skip_tts_alias_skips_tts_and_continues_to_render(monkeypatch, tmp_path)
     assert metadata["voice_file"] is None
     assert len(render_calls) == 1
     assert render_calls[0]["voice_path"] is None
+    assert len(render_calls[0]["scene_image_paths"]) == 3
 
 
 def test_tts_failure_falls_back_and_does_not_block_upload(monkeypatch, tmp_path) -> None:
@@ -165,6 +260,9 @@ def test_tts_failure_falls_back_and_does_not_block_upload(monkeypatch, tmp_path)
     def fail_tts(*args, **kwargs):
         attempts.append("failed")
         raise ConnectionError("api.openai.com failed")
+
+    async def fail_edge(*args, **kwargs):
+        raise RuntimeError("speech.platform.bing.com failed")
 
     def fake_music(path, *, duration_seconds, volume=0.14):
         path.write_bytes(b"fake music")
@@ -180,6 +278,7 @@ def test_tts_failure_falls_back_and_does_not_block_upload(monkeypatch, tmp_path)
         return "https://youtube.example/watch?v=test"
 
     monkeypatch.setattr(audio, "_openai_tts", fail_tts)
+    monkeypatch.setattr(audio, "synthesize_voice_async", fail_edge)
     monkeypatch.setattr(audio.time, "sleep", lambda seconds: None)
     monkeypatch.setattr("youtube_daily_automation.cli.generate_background_music", fake_music)
     monkeypatch.setitem(

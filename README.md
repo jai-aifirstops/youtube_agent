@@ -10,8 +10,9 @@ Important: automation cannot create a YouTube account or channel for you. Create
 - Writes a documentary-style script.
 - Splits the story into 20-40 scenes.
 - Generates an AI image prompt and narration for every scene.
-- Generates narration with OpenAI TTS or ElevenLabs.
-- Falls back to silent placeholder audio if TTS fails, so upload is not blocked.
+- Generates one OpenAI image per scene when `OPENAI_API_KEY` is available.
+- Falls back to local Pillow art cards when OpenAI images are unavailable.
+- Generates narration with OpenAI TTS by default, falls back to Edge TTS, then silent placeholder audio.
 - Generates royalty-free background music locally.
 - Adds Ken Burns-style zoom/pan movement, fade transitions, and burned-in subtitles.
 - Writes a timed `subtitles.srt` file automatically.
@@ -62,14 +63,16 @@ youtube-daily auth --client-secret-file client_secret.json --token-file token.js
 ```
 
 5. Put the full contents of `token.json` into the GitHub Actions secret `YOUTUBE_TOKEN_JSON`.
-6. Add one TTS provider secret:
-   - OpenAI: `OPENAI_API_KEY`
-   - ElevenLabs: `ELEVENLABS_API_KEY`
+6. Add these GitHub Actions secrets:
+   - `OPENAI_API_KEY`: used for OpenAI image generation and OpenAI TTS.
+   - `YOUTUBE_TOKEN_JSON`: authorized OAuth token JSON for uploads.
+   - `YOUTUBE_CLIENT_SECRET_JSON`: OAuth client secret JSON for channel authorization records.
 7. Optional repository variables:
    - `YOUTUBE_PRIVACY_STATUS`: `private`, `unlisted`, or `public` (defaults to `private`).
    - `CHANNEL_NAME`: text used in the generated description and footer.
    - `DOCUMENTARY_TOPIC`: topic override for the next run.
-   - `TTS_PROVIDER`: `openai`, `elevenlabs`, or `silent` (defaults to `openai`).
+   - `TTS_PROVIDER`: `openai`, `edge`, or `silent` (defaults to `openai`).
+   - `IMAGE_PROVIDER`: `openai` or `fallback` (defaults to `openai`).
 
 ## Environment variables
 
@@ -82,16 +85,20 @@ youtube-daily auth --client-secret-file client_secret.json --token-file token.js
 | `YOUTUBE_PRIVACY_STATUS` | `private` | Upload visibility |
 | `YOUTUBE_CATEGORY_ID` | `24` | YouTube category |
 | `DOCUMENTARY_TOPIC` | daily topic | Topic override |
-| `TTS_PROVIDER` | `openai` | `openai`, `elevenlabs`, or `silent` |
-| `OPENAI_API_KEY` | unset | OpenAI TTS key |
+| `IMAGE_PROVIDER` | `openai` | `openai` or `fallback` visual provider |
+| `OPENAI_API_KEY` | unset | OpenAI image and TTS key |
+| `OPENAI_IMAGE_MODEL` | `dall-e-3` | OpenAI image model |
+| `OPENAI_IMAGE_SIZE` | `1792x1024` | OpenAI image output size |
+| `TTS_PROVIDER` | `openai` | `openai`, `edge`, or `silent` |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | OpenAI TTS model |
-| `OPENAI_TTS_VOICE` | `alloy` | OpenAI TTS voice |
-| `ELEVENLABS_API_KEY` | unset | ElevenLabs TTS key |
-| `ELEVENLABS_VOICE_ID` | `21m00Tcm4TlvDq8ikWAM` | ElevenLabs voice |
-| `ELEVENLABS_MODEL_ID` | `eleven_multilingual_v2` | ElevenLabs model |
+| `OPENAI_TTS_VOICE` | `onyx` | Natural documentary-style OpenAI voice |
+| `EDGE_TTS_VOICE` | `en-US-GuyNeural` | Edge fallback voice |
+| `EDGE_TTS_RATE` | `+0%` | Edge fallback speech rate |
+| `EDGE_TTS_PITCH` | `+0Hz` | Edge fallback speech pitch |
 | `TTS_ATTEMPTS` | `3` | Provider retry attempts before silent fallback |
 | `TRANSITION_SECONDS` | `1.0` | Fade transition length |
 | `YOUTUBE_TOKEN_JSON` | unset | Authorized token JSON for CI uploads |
+| `YOUTUBE_CLIENT_SECRET_JSON` | unset | OAuth client secret JSON reference |
 | `YOUTUBE_TOKEN_FILE` | unset | Local token file path |
 
 ## Generated files
@@ -100,6 +107,8 @@ Each run writes:
 
 - `documentary_plan.json`: complete title, description, scenes, narration, and prompts.
 - `image_prompts.json`: one AI image prompt per scene.
+- `scene_assets/ai_scene_XX.png`: OpenAI generated scene images when `OPENAI_API_KEY` is available.
+- `scene_assets/scene_XX.png`: fallback Pillow art cards when OpenAI images are unavailable.
 - `narration.txt`: full narration sent to TTS.
 - `subtitles.srt`: timed subtitles.
 - `background_music.wav`: generated music bed.

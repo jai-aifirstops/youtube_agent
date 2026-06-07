@@ -12,6 +12,7 @@ from .config import AutomationConfig
 from .documentary import build_documentary_plan
 from .subtitles import write_srt
 from .topics import fetch_daily_topics
+from .visuals import prepare_scene_visual_assets
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,6 +49,8 @@ def run(args: argparse.Namespace) -> int:
         config = replace(config, scene_count=args.scene_count)
     if args.tts_provider:
         config = replace(config, tts_provider=args.tts_provider)
+    if args.image_provider:
+        config = replace(config, image_provider=args.image_provider)
     if not args.allow_short_render:
         config.validate_for_documentary()
 
@@ -86,6 +89,7 @@ def run(args: argparse.Namespace) -> int:
         "scene_count": len(plan.scenes),
         "duration_seconds": config.video_length_seconds,
         "tts_provider": config.tts_provider,
+        "image_provider": config.image_provider,
         "topics": [topic.__dict__ for topic in topics],
         "dry_run": args.dry_run,
     }
@@ -99,6 +103,15 @@ def run(args: argparse.Namespace) -> int:
     if not args.music_file:
         generate_background_music(music_path, duration_seconds=config.video_length_seconds)
 
+    visual_assets = prepare_scene_visual_assets(
+        plan,
+        output_dir / "scene_assets",
+        provider=config.image_provider,
+        openai_model=config.openai_image_model,
+        openai_size=config.openai_image_size,
+    )
+    metadata["visual_assets"] = [asset.to_dict() for asset in visual_assets]
+
     voice_path: Path | None = None
     if not args.no_voice:
         voice_path = synthesize_documentary_voice(
@@ -110,8 +123,9 @@ def run(args: argparse.Namespace) -> int:
             attempts=config.tts_attempts,
             openai_model=config.openai_tts_model,
             openai_voice=config.openai_tts_voice,
-            elevenlabs_voice_id=config.elevenlabs_voice_id,
-            elevenlabs_model_id=config.elevenlabs_model_id,
+            edge_voice=config.edge_tts_voice,
+            edge_rate=config.edge_tts_rate,
+            edge_pitch=config.edge_tts_pitch,
         )
         metadata["voice_file"] = str(voice_path)
     else:
@@ -128,6 +142,7 @@ def run(args: argparse.Namespace) -> int:
         music_path=music_path,
         duration_seconds=config.video_length_seconds,
         subtitles_path=subtitles_path,
+        scene_image_paths=[Path(asset.path) for asset in visual_assets],
         transition_seconds=config.transition_seconds,
     )
     metadata["video_file"] = str(video_path)
@@ -163,7 +178,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--topic", help="Documentary topic. Defaults to DOCUMENTARY_TOPIC or the first daily topic.")
     run_parser.add_argument("--scene-count", type=int, help="Number of documentary scenes. Production default is 30.")
     run_parser.add_argument("--duration-seconds", type=int, help="Video duration. Production default is 480 seconds.")
-    run_parser.add_argument("--tts-provider", choices=["openai", "elevenlabs", "silent"], help="Voice provider.")
+    run_parser.add_argument("--tts-provider", choices=["openai", "edge", "silent"], help="Voice provider.")
+    run_parser.add_argument("--image-provider", choices=["openai", "fallback"], help="Visual provider.")
     run_parser.add_argument("--allow-short-render", action="store_true", help="Allow short renders for local smoke tests.")
     run_parser.add_argument(
         "--no-voice",

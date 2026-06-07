@@ -19,10 +19,14 @@ class AutomationConfig:
     documentary_topic: str = "A hidden story from history"
     tts_provider: str = "openai"
     openai_tts_model: str = "gpt-4o-mini-tts"
-    openai_tts_voice: str = "alloy"
-    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
-    elevenlabs_model_id: str = "eleven_multilingual_v2"
+    openai_tts_voice: str = "onyx"
+    edge_tts_voice: str = "en-US-GuyNeural"
+    edge_tts_rate: str = "+0%"
+    edge_tts_pitch: str = "+0Hz"
     tts_attempts: int = 3
+    image_provider: str = "openai"
+    openai_image_model: str = "dall-e-3"
+    openai_image_size: str = "1792x1024"
     transition_seconds: float = 1.0
 
     @classmethod
@@ -38,10 +42,14 @@ class AutomationConfig:
             documentary_topic=os.getenv("DOCUMENTARY_TOPIC", "A hidden story from history"),
             tts_provider=os.getenv("TTS_PROVIDER", "openai").lower(),
             openai_tts_model=os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
-            openai_tts_voice=os.getenv("OPENAI_TTS_VOICE", "alloy"),
-            elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
-            elevenlabs_model_id=os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"),
+            openai_tts_voice=os.getenv("OPENAI_TTS_VOICE", "onyx"),
+            edge_tts_voice=os.getenv("EDGE_TTS_VOICE", "en-US-GuyNeural"),
+            edge_tts_rate=os.getenv("EDGE_TTS_RATE", "+0%"),
+            edge_tts_pitch=os.getenv("EDGE_TTS_PITCH", "+0Hz"),
             tts_attempts=int(os.getenv("TTS_ATTEMPTS", "3")),
+            image_provider=os.getenv("IMAGE_PROVIDER", "openai").lower(),
+            openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", "dall-e-3"),
+            openai_image_size=os.getenv("OPENAI_IMAGE_SIZE", "1792x1024"),
             transition_seconds=float(os.getenv("TRANSITION_SECONDS", "1.0")),
         )
 

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Generate and upload daily cinematic documentary videos."
 requires-python = ">=3.11"
 dependencies = [
+    "edge-tts",
     "google-api-python-client",
     "google-auth-oauthlib",
     "moviepy",
