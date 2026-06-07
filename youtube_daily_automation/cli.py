@@ -3,11 +3,14 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
+from dataclasses import replace
 from pathlib import Path
 
-from .audio import generate_background_music, synthesize_voice
+from .audio import generate_background_music, synthesize_documentary_voice
 from .config import AutomationConfig
-from .script import build_script
+from .documentary import build_documentary_plan
+from .subtitles import write_srt
 from .topics import fetch_daily_topics
 
 
@@ -39,18 +42,50 @@ def auth(args: argparse.Namespace) -> int:
 def run(args: argparse.Namespace) -> int:
     day = dt.date.fromisoformat(args.date) if args.date else dt.datetime.now(dt.UTC).date()
     config = AutomationConfig.from_env(output_dir=args.output_dir)
+    if args.duration_seconds:
+        config = replace(config, video_length_seconds=args.duration_seconds)
+    if args.scene_count:
+        config = replace(config, scene_count=args.scene_count)
+    if args.tts_provider:
+        config = replace(config, tts_provider=args.tts_provider)
+    if not args.allow_short_render:
+        config.validate_for_documentary()
+
     output_dir = config.ensure_output_dir()
 
     topics = fetch_daily_topics(day, count=config.topic_count, offline=args.offline)
-    video_script = build_script(topics, day, channel_name=config.channel_name)
-    _write_text(output_dir / "narration.txt", video_script.narration)
-    _write_text(output_dir / "description.txt", video_script.description)
+    topic = args.topic or os.getenv("DOCUMENTARY_TOPIC") or (topics[0].title if topics else config.documentary_topic)
+    plan = build_documentary_plan(
+        topic=topic,
+        day=day,
+        source_topics=topics,
+        scene_count=config.scene_count,
+        duration_seconds=config.video_length_seconds,
+        channel_name=config.channel_name,
+    )
+    narration_path = output_dir / "narration.txt"
+    description_path = output_dir / "description.txt"
+    plan_path = output_dir / "documentary_plan.json"
+    prompts_path = output_dir / "image_prompts.json"
+    subtitles_path = output_dir / "subtitles.srt"
+
+    _write_text(narration_path, plan.narration)
+    _write_text(description_path, plan.description)
+    _write_json(plan_path, plan.to_dict())
+    _write_json(prompts_path, {f"scene_{scene.number:02d}": scene.image_prompt for scene in plan.scenes})
+    write_srt(plan.scenes, subtitles_path)
 
     metadata = {
         "date": day.isoformat(),
-        "title": video_script.title,
-        "description_file": str(output_dir / "description.txt"),
-        "narration_file": str(output_dir / "narration.txt"),
+        "title": plan.title,
+        "description_file": str(description_path),
+        "narration_file": str(narration_path),
+        "plan_file": str(plan_path),
+        "image_prompts_file": str(prompts_path),
+        "subtitles_file": str(subtitles_path),
+        "scene_count": len(plan.scenes),
+        "duration_seconds": config.video_length_seconds,
+        "tts_provider": config.tts_provider,
         "topics": [topic.__dict__ for topic in topics],
         "dry_run": args.dry_run,
     }
@@ -66,29 +101,34 @@ def run(args: argparse.Namespace) -> int:
 
     voice_path: Path | None = None
     if not args.no_voice:
-        voice_path = synthesize_voice(
-            video_script.narration,
+        voice_path = synthesize_documentary_voice(
+            plan.narration,
             output_dir / "voice.mp3",
-            voice=config.voice,
-            rate=config.tts_rate,
-            pitch=config.tts_pitch,
+            provider=config.tts_provider,
             fallback_path=output_dir / "silent_voice.wav",
             fallback_duration_seconds=config.video_length_seconds,
+            attempts=config.tts_attempts,
+            openai_model=config.openai_tts_model,
+            openai_voice=config.openai_tts_voice,
+            elevenlabs_voice_id=config.elevenlabs_voice_id,
+            elevenlabs_model_id=config.elevenlabs_model_id,
         )
         metadata["voice_file"] = str(voice_path)
     else:
         metadata["voice_file"] = None
 
-    video_path = output_dir / f"daily_top_10_{day.isoformat()}.mp4"
-    from .video import render_video
+    video_path = output_dir / f"daily_documentary_{day.isoformat()}.mp4"
+    from .video import render_documentary_video
 
-    render_video(
-        topics,
+    render_documentary_video(
+        plan,
         output_path=video_path,
-        slides_dir=output_dir / "slides",
+        assets_dir=output_dir / "scene_assets",
         voice_path=voice_path,
         music_path=music_path,
         duration_seconds=config.video_length_seconds,
+        subtitles_path=subtitles_path,
+        transition_seconds=config.transition_seconds,
     )
     metadata["video_file"] = str(video_path)
 
@@ -97,8 +137,8 @@ def run(args: argparse.Namespace) -> int:
 
         metadata["youtube_url"] = upload_video(
             video_path,
-            title=video_script.title,
-            description=video_script.description,
+            title=plan.title,
+            description=plan.description,
             category_id=config.youtube_category_id,
             privacy_status=config.youtube_privacy_status,
         )
@@ -111,15 +151,20 @@ def run(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Create and optionally upload a daily top-10 YouTube video.")
+    parser = argparse.ArgumentParser(description="Create and optionally upload a daily cinematic documentary.")
     subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser("run", help="Generate the daily video.")
+    run_parser = subparsers.add_parser("run", help="Generate the daily documentary.")
     run_parser.add_argument("--date", help="ISO date to generate for. Defaults to today in UTC.")
     run_parser.add_argument("--output-dir", help="Directory for generated assets.")
     run_parser.add_argument("--offline", action="store_true", help="Use built-in fallback topics instead of Wikimedia.")
     run_parser.add_argument("--dry-run", action="store_true", help="Write script and metadata without TTS, video, or upload.")
     run_parser.add_argument("--upload", action="store_true", help="Upload the rendered video to YouTube.")
+    run_parser.add_argument("--topic", help="Documentary topic. Defaults to DOCUMENTARY_TOPIC or the first daily topic.")
+    run_parser.add_argument("--scene-count", type=int, help="Number of documentary scenes. Production default is 30.")
+    run_parser.add_argument("--duration-seconds", type=int, help="Video duration. Production default is 480 seconds.")
+    run_parser.add_argument("--tts-provider", choices=["openai", "elevenlabs", "silent"], help="Voice provider.")
+    run_parser.add_argument("--allow-short-render", action="store_true", help="Allow short renders for local smoke tests.")
     run_parser.add_argument(
         "--no-voice",
         "--skip-tts",

@@ -5,10 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "youtube-agent"
 version = "0.1.0"
-description = "Generate and upload a daily one-minute YouTube Shorts-style video."
+description = "Generate and upload daily cinematic documentary videos."
 requires-python = ">=3.11"
 dependencies = [
-    "edge-tts",
     "google-api-python-client",
     "google-auth-oauthlib",
     "moviepy",
