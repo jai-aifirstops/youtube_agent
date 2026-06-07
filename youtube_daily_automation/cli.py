@@ -189,10 +189,10 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--duration-seconds", type=int, help="Video duration. Production default is 360 seconds.")
     run_parser.add_argument("--tts-provider", choices=["edge", "silent"], help="Voice provider.")
     run_parser.add_argument("--image-provider", choices=["wikimedia", "fallback"], help="Visual provider.")
-    run_parser.add_argument("--narration-speed", help="Edge TTS narration speed, such as -10%, +0%, or +15%.")
+    run_parser.add_argument("--narration-speed", help="Edge TTS narration speed, such as -10%%, +0%%, or +15%%.")
     run_parser.add_argument("--music-volume", type=float, help="Background music mix volume from 0.0 to 1.0.")
     run_parser.add_argument("--transition-style", choices=["fade", "crossfade", "slide"], help="Scene transition style.")
-    run_parser.add_argument("--allow-fallback", action="store_true", help="Allow Wikimedia runs to continue below 60% real-image coverage.")
+    run_parser.add_argument("--allow-fallback", action="store_true", help="Allow Wikimedia runs to continue below 60%% real-image coverage.")
     run_parser.add_argument("--allow-short-render", action="store_true", help="Allow short renders for local smoke tests.")
     run_parser.add_argument(
         "--no-voice",
