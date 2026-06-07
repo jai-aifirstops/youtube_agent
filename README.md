@@ -1,17 +1,22 @@
-# YouTube Daily Automation Agent
+# YouTube Documentary Automation Agent
 
-This project generates a one-minute "top 10 interesting topics" video every day, adds voice narration and generated background music, and can upload the result to an existing YouTube channel through the YouTube Data API.
+This project generates a 5-8 minute cinematic documentary every day using free services, adds Edge TTS narration, subtitles, background music, camera motion, transitions, and uploads the exported 1080p MP4 to an existing YouTube channel through the YouTube Data API.
 
 Important: automation cannot create a YouTube account or channel for you. Create the Google account/channel manually, then authorize this app to upload to that channel.
 
 ## What it does
 
-- Fetches daily topic ideas from Wikimedia's "On this day" feed, with built-in fallback facts.
-- Builds a concise narration script and YouTube description.
-- Generates TTS narration with `edge-tts`.
-- Retries TTS generation and falls back to silent placeholder audio if Edge TTS is unavailable.
+- Fetches daily context from Wikimedia's "On this day" feed, with built-in fallback facts.
+- Writes a documentary-style script.
+- Splits the story into 20-30 scenes.
+- Searches Wikimedia Commons for each scene.
+- Downloads and caches one relevant free Wikimedia image per scene when available.
+- Falls back to local Pillow art cards only when Wikimedia lookup or download fails.
+- Generates narration with free Edge TTS, then silent placeholder audio if TTS fails.
 - Generates royalty-free background music locally.
-- Renders a vertical MP4 video suitable for Shorts-style content.
+- Adds Ken Burns-style zoom/pan movement, fade transitions, and burned-in subtitles.
+- Writes a timed `subtitles.srt` file automatically.
+- Exports a 1080p MP4.
 - Uploads through OAuth using the YouTube Data API.
 - Runs daily from `.github/workflows/daily-youtube.yml`.
 
@@ -22,22 +27,28 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-Dry-run without network, TTS, video rendering, or upload:
+Dry-run without TTS, video rendering, or upload:
 
 ```bash
 youtube-daily run --offline --dry-run --date 2026-06-06
 ```
 
-Render a local video without uploading:
+Render the default 6-minute documentary without uploading:
 
 ```bash
 youtube-daily run
 ```
 
-Render faster for local testing without voice generation:
+Render a short local smoke test without voice generation:
 
 ```bash
-youtube-daily run --no-voice
+youtube-daily run --offline --no-voice --allow-short-render --scene-count 3 --duration-seconds 12 --transition-style slide
+```
+
+Allow a Wikimedia run to continue with fallback cards if fewer than 60% of scenes get real images:
+
+```bash
+youtube-daily run --allow-fallback
 ```
 
 Render and upload:
@@ -61,24 +72,55 @@ youtube-daily auth --client-secret-file client_secret.json --token-file token.js
 6. Optional repository variables:
    - `YOUTUBE_PRIVACY_STATUS`: `private`, `unlisted`, or `public` (defaults to `private`).
    - `CHANNEL_NAME`: text used in the generated description and footer.
+   - `DOCUMENTARY_TOPIC`: topic override for the next run.
+   - `TTS_PROVIDER`: `edge` or `silent` (defaults to `edge`).
+   - `IMAGE_PROVIDER`: `wikimedia` or `fallback` (defaults to `wikimedia`).
+   - `EDGE_TTS_RATE`: narration speed such as `-10%`, `+0%`, or `+15%`.
+   - `MUSIC_VOLUME`: background music mix volume from `0.0` to `1.0`.
+   - `TRANSITION_STYLE`: `fade`, `crossfade`, or `slide`.
 
 ## Environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OUTPUT_DIR` | `dist` | Generated assets directory |
-| `TOPIC_COUNT` | `10` | Number of topics per video |
-| `VIDEO_LENGTH_SECONDS` | `60` | Target video length |
+| `TOPIC_COUNT` | `8` | Number of source context items |
+| `SCENE_COUNT` | `24` | Number of documentary scenes |
+| `VIDEO_LENGTH_SECONDS` | `360` | Target video length, 300-480 seconds |
 | `YOUTUBE_PRIVACY_STATUS` | `private` | Upload visibility |
 | `YOUTUBE_CATEGORY_ID` | `24` | YouTube category |
-| `TTS_VOICE` | `en-US-AriaNeural` | Narration voice |
-| `TTS_RATE` | `+0%` | Narration speed |
-| `TTS_PITCH` | `+0Hz` | Narration pitch |
+| `DOCUMENTARY_TOPIC` | daily topic | Topic override |
+| `IMAGE_PROVIDER` | `wikimedia` | `wikimedia` or `fallback` visual provider |
+| `TTS_PROVIDER` | `edge` | `edge` or `silent` |
+| `EDGE_TTS_VOICE` | `en-US-GuyNeural` | Edge narration voice |
+| `EDGE_TTS_RATE` | `+0%` | Edge narration speed |
+| `EDGE_TTS_PITCH` | `+0Hz` | Edge speech pitch |
+| `TTS_ATTEMPTS` | `3` | Provider retry attempts before silent fallback |
+| `MUSIC_VOLUME` | `0.18` | Background music mix volume |
+| `TRANSITION_SECONDS` | `1.0` | Fade transition length |
+| `TRANSITION_STYLE` | `crossfade` | `fade`, `crossfade`, or `slide` |
 | `YOUTUBE_TOKEN_JSON` | unset | Authorized token JSON for CI uploads |
 | `YOUTUBE_TOKEN_FILE` | unset | Local token file path |
+
+## Generated files
+
+Each run writes:
+
+- `documentary_plan.json`: complete title, description, scenes, narration, and prompts.
+- `image_prompts.json`: one visual search prompt per scene.
+- `scene_assets/wikimedia_scene_XX.png`: downloaded Wikimedia Commons images when available.
+- `scene_assets/cache/*.png`: cached Wikimedia downloads reused across runs.
+- `scene_assets/scene_XX.png`: fallback Pillow art cards when Wikimedia images are unavailable.
+- `metadata.json`: visual summary, including image providers, source URLs, licenses, and fallback counts.
+- `narration.txt`: full narration sent to TTS.
+- `subtitles.srt`: timed subtitles.
+- `background_music.wav`: generated music bed.
+- `daily_documentary_<date>.mp4`: exported 1080p video.
 
 ## Tests
 
 ```bash
 python -m pytest
 ```
+
+Wikimedia runs fail by default when fewer than 60% of scenes receive real images. Use `--allow-fallback` only when fallback art cards are acceptable.

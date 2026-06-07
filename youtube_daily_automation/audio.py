@@ -25,6 +25,162 @@ async def synthesize_voice_async(
     return output_path
 
 
+def synthesize_documentary_voice(
+    text: str,
+    output_path: Path,
+    *,
+    provider: str,
+    fallback_path: Path | None = None,
+    fallback_duration_seconds: int = 480,
+    attempts: int = DEFAULT_TTS_ATTEMPTS,
+    retry_delay_seconds: float = 1.0,
+    edge_voice: str = "en-US-GuyNeural",
+    edge_rate: str = "+0%",
+    edge_pitch: str = "+0Hz",
+) -> Path:
+    if attempts < 1:
+        raise ValueError("TTS attempts must be at least 1.")
+    if provider == "silent":
+        placeholder_path = fallback_path or output_path.with_name("silent_voice.wav")
+        return generate_silent_audio(placeholder_path, duration_seconds=fallback_duration_seconds)
+    if provider != "edge":
+        raise ValueError("TTS_PROVIDER must be edge or silent.")
+
+    chunks = _split_text_for_tts(text)
+    errors: list[str] = []
+    try:
+        _synthesize_chunks(
+            chunks,
+            output_path,
+            attempts=attempts,
+            retry_delay_seconds=retry_delay_seconds,
+            edge_voice=edge_voice,
+            edge_rate=edge_rate,
+            edge_pitch=edge_pitch,
+        )
+        return output_path
+    except Exception as error:
+        errors.append(str(error))
+        if output_path.exists():
+            output_path.unlink()
+
+    placeholder_path = fallback_path or output_path.with_name("silent_voice.wav")
+    generate_silent_audio(placeholder_path, duration_seconds=fallback_duration_seconds)
+    print(
+        f"{provider} TTS failed; using silent placeholder audio at {placeholder_path}. "
+        f"Last error: {errors[-1]}"
+    )
+    return placeholder_path
+
+
+def _synthesize_chunks(
+    chunks: list[str],
+    output_path: Path,
+    *,
+    attempts: int,
+    retry_delay_seconds: float,
+    edge_voice: str,
+    edge_rate: str,
+    edge_pitch: str,
+) -> Path:
+    try:
+        if len(chunks) == 1:
+            _synthesize_provider_chunk(
+                chunks[0],
+                output_path,
+                attempts=attempts,
+                retry_delay_seconds=retry_delay_seconds,
+                edge_voice=edge_voice,
+                edge_rate=edge_rate,
+                edge_pitch=edge_pitch,
+            )
+            return output_path
+
+        segment_paths = []
+        for index, chunk in enumerate(chunks, start=1):
+            segment_path = output_path.with_name(f"{output_path.stem}_part_{index:02d}{output_path.suffix}")
+            _synthesize_provider_chunk(
+                chunk,
+                segment_path,
+                attempts=attempts,
+                retry_delay_seconds=retry_delay_seconds,
+                edge_voice=edge_voice,
+                edge_rate=edge_rate,
+                edge_pitch=edge_pitch,
+            )
+            segment_paths.append(segment_path)
+        _concatenate_audio_files(segment_paths, output_path)
+        return output_path
+    except Exception:
+        if output_path.exists():
+            output_path.unlink()
+        raise
+
+
+def _synthesize_provider_chunk(
+    text: str,
+    output_path: Path,
+    *,
+    attempts: int,
+    retry_delay_seconds: float,
+    edge_voice: str,
+    edge_rate: str,
+    edge_pitch: str,
+) -> Path:
+    errors: list[str] = []
+    for attempt in range(1, attempts + 1):
+        try:
+            asyncio.run(
+                synthesize_voice_async(
+                    text,
+                    output_path,
+                    voice=edge_voice,
+                    rate=edge_rate,
+                    pitch=edge_pitch,
+                )
+            )
+            return output_path
+        except Exception as error:
+            errors.append(f"attempt {attempt}: {error}")
+            if output_path.exists():
+                output_path.unlink()
+            if attempt < attempts:
+                time.sleep(retry_delay_seconds * attempt)
+    raise RuntimeError("; ".join(errors))
+
+
+def _split_text_for_tts(text: str, *, max_chars: int = 3000) -> list[str]:
+    paragraphs = [paragraph.strip() for paragraph in text.split("\n\n") if paragraph.strip()]
+    chunks: list[str] = []
+    current = ""
+    for paragraph in paragraphs or [text.strip()]:
+        candidate = f"{current}\n\n{paragraph}".strip() if current else paragraph
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        current = paragraph
+    if current:
+        chunks.append(current)
+    return chunks or [text]
+
+
+def _concatenate_audio_files(segment_paths: list[Path], output_path: Path) -> Path:
+    try:
+        from moviepy import AudioFileClip, concatenate_audioclips
+    except ImportError:  # pragma: no cover - supports MoviePy 1.x.
+        from moviepy.editor import AudioFileClip, concatenate_audioclips
+
+    clips = [AudioFileClip(str(path)) for path in segment_paths]
+    audio = concatenate_audioclips(clips)
+    audio.write_audiofile(str(output_path), logger=None)
+    audio.close()
+    for clip in clips:
+        clip.close()
+    return output_path
+
+
 def synthesize_voice(
     text: str,
     output_path: Path,
@@ -37,36 +193,18 @@ def synthesize_voice(
     attempts: int = DEFAULT_TTS_ATTEMPTS,
     retry_delay_seconds: float = 1.0,
 ) -> Path:
-    if attempts < 1:
-        raise ValueError("TTS attempts must be at least 1.")
-
-    errors: list[str] = []
-    for attempt in range(1, attempts + 1):
-        try:
-            return asyncio.run(
-                synthesize_voice_async(
-                    text,
-                    output_path,
-                    voice=voice,
-                    rate=rate,
-                    pitch=pitch,
-                )
-            )
-        except Exception as error:
-            errors.append(f"attempt {attempt}: {error}")
-            if output_path.exists():
-                output_path.unlink()
-            if attempt < attempts:
-                time.sleep(retry_delay_seconds * attempt)
-
-    placeholder_path = fallback_path or output_path.with_name("silent_voice.wav")
-    generate_silent_audio(placeholder_path, duration_seconds=fallback_duration_seconds)
-    print(
-        "Edge TTS failed after "
-        f"{attempts} attempts; using silent placeholder audio at {placeholder_path}. "
-        f"Last error: {errors[-1]}"
+    return synthesize_documentary_voice(
+        text,
+        output_path,
+        provider="edge",
+        fallback_path=fallback_path,
+        fallback_duration_seconds=fallback_duration_seconds,
+        attempts=attempts,
+        retry_delay_seconds=retry_delay_seconds,
+        edge_voice=voice,
+        edge_rate=rate,
+        edge_pitch=pitch,
     )
-    return placeholder_path
 
 
 def generate_silent_audio(output_path: Path, *, duration_seconds: int) -> Path:
